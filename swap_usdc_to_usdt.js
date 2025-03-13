@@ -10,9 +10,9 @@ dotenv.config();
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const RPC_URL = process.env.RPC_URL || 'https://rpc.sophon.xyz';
 const ROUTER_ADDRESS = process.env.ROUTER_ADDRESS || '0x455FFfa180D50D8a1AdaaA46Eb2bfb4C1bb28602';
-const USDC_ETH_POOL_ADDRESS = process.env.USDC_ETH_POOL_ADDRESS || '0x353B35a3362Dff8174cd9679BC4a46365CcD4dA7';
-const WETH_ADDRESS = process.env.WETH_ADDRESS || '0x72af9f169b619d85a47dfa8fefbcd39de55c567d'; // ETH токен (BeaconProxy)
+const USDC_USDT_POOL_ADDRESS = '0x61a87fa6Dd89a23c78F0754EF3372d35ccde5935'; // Пул USDC/USDT
 const USDC_ADDRESS = process.env.USDC_ADDRESS || '0x9Aa0F72392B5784Ad86c6f3E899bCc053D00Db4F';
+const USDT_ADDRESS = '0x6386dA73545ae4E2B2E0393688fA8B65Bb9a7169'; // Адрес USDT токена
 const PAYMASTER_ADDRESS = process.env.PAYMASTER_ADDRESS || '0x98546B226dbbA8230cf620635a1e4ab01F6A99B2';
 
 // Параметры газа
@@ -31,89 +31,9 @@ function safeJsonStringify(obj, space = 2) {
 }
 
 /**
- * Получить баланс ETH токена с помощью низкоуровневого вызова
- * (обходим проблемы с прокси-контрактом)
+ * Функция для выполнения свап-операции USDC -> USDT через SyncSwap с использованием Paymaster
  */
-async function getETHTokenBalance(provider, tokenAddress, walletAddress) {
-    try {
-        console.log(`\n=== DEBUG: Получение баланса ETH ===`);
-        console.log(`Адрес токена: ${tokenAddress}`);
-        console.log(`Адрес кошелька: ${walletAddress}`);
-        
-        // Создаем стандартный ethers провайдер
-        const ethersProvider = new ethers.JsonRpcProvider(RPC_URL);
-        
-        // Пробуем несколько методов для получения баланса
-        
-        // Метод 1: через ABI
-        try {
-            const tokenAbi = [
-                'function balanceOf(address) view returns (uint256)',
-                'function decimals() view returns (uint8)'
-            ];
-            
-            const tokenContract = new ethers.Contract(tokenAddress, tokenAbi, ethersProvider);
-            const balance = await tokenContract.balanceOf(walletAddress);
-            console.log(`Метод 1 (ABI): ${ethers.formatEther(balance)} ETH`);
-            return balance;
-        } catch (error) {
-            console.log(`Ошибка при ABI вызове: ${error.message}`);
-        }
-
-        // Метод 2: через ethers.id
-        try {
-            const balanceOfData = ethers.id('balanceOf(address)').slice(0, 10) + 
-                                walletAddress.substring(2).padStart(64, '0');
-            
-            console.log(`Метод 2 данные: ${balanceOfData}`);
-            
-            const result = await ethersProvider.call({
-                to: tokenAddress,
-                data: balanceOfData
-            });
-            
-            if (result && result !== '0x') {
-                const balance = ethers.toBigInt(result);
-                console.log(`Метод 2 (ethers.id): ${ethers.formatEther(balance)} ETH`);
-                return balance;
-            }
-        } catch (error) {
-            console.log(`Ошибка при вызове через ethers.id: ${error.message}`);
-        }
-
-        // Метод 3: прямой вызов с хардкодированной сигнатурой
-        try {
-            const paddedAddress = walletAddress.toLowerCase().substring(2).padStart(64, '0');
-            const callData = `0x70a08231${paddedAddress}`;
-            
-            console.log(`Метод 3 данные: ${callData}`);
-            
-            const result = await ethersProvider.call({
-                to: ethers.getAddress(tokenAddress),
-                data: callData
-            });
-            
-            if (result && result !== '0x') {
-                const balance = ethers.toBigInt(result);
-                console.log(`Метод 3 (хардкод): ${ethers.formatEther(balance)} ETH`);
-                return balance;
-            }
-        } catch (error) {
-            console.log(`Ошибка при прямом вызове: ${error.message}`);
-        }
-        
-        console.log(`Все методы получения баланса ETH не сработали`);
-        return 0n;
-    } catch (error) {
-        console.error('Ошибка при получении ETH баланса:', error.message);
-        return 0n;
-    }
-}
-
-/**
- * Функция для выполнения свап-операции USDC -> ETH через SyncSwap с использованием Paymaster
- */
-async function swapUSDCToETH() {
+async function swapUSDCToUSDT() {
     try {
         console.log('Инициализация провайдера и кошелька...');
         const provider = new Provider(RPC_URL);
@@ -124,9 +44,9 @@ async function swapUSDCToETH() {
         // Проверка адресов
         console.log('\n=== Используемые адреса ===');
         console.log(`ROUTER_ADDRESS: ${ROUTER_ADDRESS}`);
-        console.log(`USDC_ETH_POOL_ADDRESS: ${USDC_ETH_POOL_ADDRESS}`);
-        console.log(`ETH_TOKEN_ADDRESS: ${WETH_ADDRESS}`);
+        console.log(`USDC_USDT_POOL_ADDRESS: ${USDC_USDT_POOL_ADDRESS}`);
         console.log(`USDC_ADDRESS: ${USDC_ADDRESS}`);
+        console.log(`USDT_ADDRESS: ${USDT_ADDRESS}`);
         console.log(`PAYMASTER_ADDRESS: ${PAYMASTER_ADDRESS}`);
 
         console.log(`\nСумма для обмена: ${ethers.formatUnits(AMOUNT_TO_SWAP, 6)} USDC`);
@@ -136,11 +56,22 @@ async function swapUSDCToETH() {
         const usdcBalance = await usdcContract.balanceOf(walletAddress);
         console.log(`Баланс USDC: ${ethers.formatUnits(usdcBalance, 6)} USDC`);
 
-        // Проверка баланса ETH (обходим прокси-контракт с помощью низкоуровневого вызова)
-        // const ethBalance = await getETHTokenBalance(provider, WETH_ADDRESS, walletAddress);
-        // Используем известное значение из check_eth_fixed.js, так как вызов не работает через Provider
-        const ethBalance = ethers.parseEther('0.002780997609642445');
-        console.log(`Баланс ETH (токен): ${ethers.formatEther(ethBalance)} ETH`);
+        // Проверка баланса USDT
+        const usdtContract = new ethers.Contract(USDT_ADDRESS, ERC20_ABI, provider);
+        try {
+            const usdtBalance = await usdtContract.balanceOf(walletAddress);
+            const usdtDecimals = await usdtContract.decimals();
+            console.log(`Баланс USDT: ${ethers.formatUnits(usdtBalance, usdtDecimals)} USDT (decimals: ${usdtDecimals})`);
+        } catch (error) {
+            console.log(`Ошибка при получении баланса USDT: ${error.message}`);
+            console.log('Используем стандартное значение decimals = 6');
+            try {
+                const usdtBalance = await usdtContract.balanceOf(walletAddress);
+                console.log(`Баланс USDT: ${ethers.formatUnits(usdtBalance, 6)} USDT`);
+            } catch (error) {
+                console.log(`Не удалось получить баланс USDT: ${error.message}`);
+            }
+        }
         
         // Проверка баланса SOPH (нативного токена)
         const sophBalance = await provider.getBalance(walletAddress);
@@ -191,8 +122,8 @@ async function swapUSDCToETH() {
         // Подготовка параметров для свопа
         console.log('\nПодготовка параметров для свопа...');
         
-        // withdrawMode: 0 - внутренний трансфер, 1 - вывести в нативный ETH, 2 - вывести как WETH/ETH токен
-        const withdrawMode = 1; // Получаем ETH как нативный токен
+        // withdrawMode: 0 - внутренний трансфер (для токенов)
+        const withdrawMode = 0; // Получаем USDT как токен через внутренний трансфер
         
         // Кодируем данные вызова для свап-операции (tokenIn, recipient, withdrawMode)
         const swapData = ethers.AbiCoder.defaultAbiCoder().encode(
@@ -202,7 +133,7 @@ async function swapUSDCToETH() {
         
         // Создаем шаги свопа
         const steps = [{
-            pool: USDC_ETH_POOL_ADDRESS,
+            pool: USDC_USDT_POOL_ADDRESS,
             data: swapData,
             callback: ethers.ZeroAddress,
             callbackData: '0x'
@@ -217,16 +148,16 @@ async function swapUSDCToETH() {
 
         console.log('DEBUG - Шаги свопа:', safeJsonStringify(steps));
         console.log('DEBUG - Путь свопа:', safeJsonStringify(paths));
-        console.log('DEBUG - Режим вывода (withdrawMode): ' + withdrawMode + ' (1 = получение нативного ETH)');
+        console.log('DEBUG - Режим вывода (withdrawMode): ' + withdrawMode + ' (0 = внутренний трансфер токена USDT)');
 
         // Определяем срок действия транзакции (20 минут)
         const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
 
         // Минимальное количество токенов на выходе
         // Защищаемся от проскальзывания, требуя минимум 80% от ожидаемой суммы
-        // 0.05 USDC примерно = 0.00008 ETH (по текущему курсу)
-        const expectedOutput = ethers.parseEther('0.00008'); // Минимум ETH, которое хотим получить
-        const minAmountOut = expectedOutput; // Раньше было 0
+        // 0.05 USDC примерно = 0.049 USDT (если курс почти 1:1 с небольшим проскальзыванием)
+        const expectedOutput = ethers.parseUnits('0.049', 6); // Минимум USDT, которое хотим получить
+        const minAmountOut = expectedOutput;
 
         // Инициализация контракта роутера
         const routerContract = new ethers.Contract(ROUTER_ADDRESS, SYNCSWAP_ROUTER_ABI, wallet);
@@ -235,8 +166,8 @@ async function swapUSDCToETH() {
         console.log('Подготовка транзакции с использованием Paymaster...');
         console.log(`- Paymaster адрес: ${PAYMASTER_ADDRESS}`);
         console.log(`- Сумма USDC для свапа: ${ethers.formatUnits(AMOUNT_TO_SWAP, 6)} USDC`);
-        console.log(`- Адрес пула: ${USDC_ETH_POOL_ADDRESS}`);
-        console.log(`- Минимальный вывод ETH: ${ethers.formatEther(minAmountOut)} ETH`);
+        console.log(`- Адрес пула: ${USDC_USDT_POOL_ADDRESS}`);
+        console.log(`- Минимальный вывод USDT: ${ethers.formatUnits(minAmountOut, 6)} USDT`);
         console.log(`- Газ лимит: ${GAS_LIMIT}`);
         console.log(`- Дедлайн: ${new Date(deadline * 1000).toLocaleString()}`);
 
@@ -261,19 +192,24 @@ async function swapUSDCToETH() {
             console.log(`Блок: ${receipt.blockNumber}`);
             
             // Проверяем новые балансы
-            // const newEthBalance = await getETHTokenBalance(provider, WETH_ADDRESS, walletAddress);
-            // Используем известное значение плюс ожидаемую сумму ETH
-            const expectedEthReceived = ethers.parseEther('0.0001');
-            const newEthBalance = ethBalance + expectedEthReceived;
-            console.log(`Новый баланс ETH (токен): ${ethers.formatEther(newEthBalance)} ETH`);
-            
             const newUsdcBalance = await usdcContract.balanceOf(walletAddress);
             console.log(`Новый баланс USDC: ${ethers.formatUnits(newUsdcBalance, 6)} USDC`);
             
-            // Проверяем полученное количество ETH
-            const ethReceived = newEthBalance - ethBalance;
-            if (ethReceived > 0n) {
-                console.log(`Получено ETH: ${ethers.formatEther(ethReceived)} ETH`);
+            try {
+                const usdtDecimals = await usdtContract.decimals();
+                const newUsdtBalance = await usdtContract.balanceOf(walletAddress);
+                console.log(`Новый баланс USDT: ${ethers.formatUnits(newUsdtBalance, usdtDecimals)} USDT`);
+                
+                // Проверяем полученное количество USDT
+                const usdtBefore = await usdtContract.balanceOf(walletAddress);
+                if (newUsdtBalance > usdtBefore) {
+                    const usdtReceived = newUsdtBalance - usdtBefore;
+                    console.log(`Получено USDT: ${ethers.formatUnits(usdtReceived, usdtDecimals)} USDT`);
+                }
+            } catch (error) {
+                console.log('Используем стандартные decimals = 6 для USDT');
+                const newUsdtBalance = await usdtContract.balanceOf(walletAddress);
+                console.log(`Новый баланс USDT: ${ethers.formatUnits(newUsdtBalance, 6)} USDT`);
             }
         } else {
             console.error('Транзакция завершилась с ошибкой');
@@ -295,5 +231,5 @@ async function swapUSDCToETH() {
     }
 }
 
-// Запуск свапа USDC -> ETH
-swapUSDCToETH().catch(console.error);
+// Запуск свапа USDC -> USDT
+swapUSDCToUSDT().catch(console.error); 

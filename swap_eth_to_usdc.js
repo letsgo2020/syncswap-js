@@ -11,15 +11,15 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const RPC_URL = process.env.RPC_URL || 'https://rpc.sophon.xyz';
 const ROUTER_ADDRESS = process.env.ROUTER_ADDRESS || '0x455FFfa180D50D8a1AdaaA46Eb2bfb4C1bb28602';
 const USDC_ETH_POOL_ADDRESS = process.env.USDC_ETH_POOL_ADDRESS || '0x353B35a3362Dff8174cd9679BC4a46365CcD4dA7';
-const WETH_ADDRESS = process.env.WETH_ADDRESS || '0x72af9f169b619d85a47dfa8fefbcd39de55c567d'; // ETH токен (BeaconProxy)
+const ETH_TOKEN_ADDRESS = process.env.WETH_ADDRESS || '0x72af9f169b619d85a47dfa8fefbcd39de55c567d'; // ETH токен (BeaconProxy)
 const USDC_ADDRESS = process.env.USDC_ADDRESS || '0x9Aa0F72392B5784Ad86c6f3E899bCc053D00Db4F';
 const PAYMASTER_ADDRESS = process.env.PAYMASTER_ADDRESS || '0x98546B226dbbA8230cf620635a1e4ab01F6A99B2';
 
 // Параметры газа
 const GAS_LIMIT = process.env.GAS_LIMIT || 3000000;
 
-// Сумма USDC для обмена (0.05 USDC)
-const AMOUNT_TO_SWAP = ethers.parseUnits('0.05', 6);
+// Сумма ETH для обмена (0.001 ETH)
+const AMOUNT_TO_SWAP = ethers.parseEther('0.001');
 
 /**
  * Безопасная сериализация объектов с BigInt
@@ -111,9 +111,9 @@ async function getETHTokenBalance(provider, tokenAddress, walletAddress) {
 }
 
 /**
- * Функция для выполнения свап-операции USDC -> ETH через SyncSwap с использованием Paymaster
+ * Функция для выполнения свап-операции ETH -> USDC через SyncSwap с использованием Paymaster
  */
-async function swapUSDCToETH() {
+async function swapETHToUSDC() {
     try {
         console.log('Инициализация провайдера и кошелька...');
         const provider = new Provider(RPC_URL);
@@ -125,11 +125,11 @@ async function swapUSDCToETH() {
         console.log('\n=== Используемые адреса ===');
         console.log(`ROUTER_ADDRESS: ${ROUTER_ADDRESS}`);
         console.log(`USDC_ETH_POOL_ADDRESS: ${USDC_ETH_POOL_ADDRESS}`);
-        console.log(`ETH_TOKEN_ADDRESS: ${WETH_ADDRESS}`);
+        console.log(`ETH_TOKEN_ADDRESS: ${ETH_TOKEN_ADDRESS}`);
         console.log(`USDC_ADDRESS: ${USDC_ADDRESS}`);
         console.log(`PAYMASTER_ADDRESS: ${PAYMASTER_ADDRESS}`);
 
-        console.log(`\nСумма для обмена: ${ethers.formatUnits(AMOUNT_TO_SWAP, 6)} USDC`);
+        console.log(`\nСумма для обмена: ${ethers.formatEther(AMOUNT_TO_SWAP)} ETH`);
 
         // Проверка балансов
         const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
@@ -137,7 +137,7 @@ async function swapUSDCToETH() {
         console.log(`Баланс USDC: ${ethers.formatUnits(usdcBalance, 6)} USDC`);
 
         // Проверка баланса ETH (обходим прокси-контракт с помощью низкоуровневого вызова)
-        // const ethBalance = await getETHTokenBalance(provider, WETH_ADDRESS, walletAddress);
+        // const ethBalance = await getETHTokenBalance(provider, ETH_TOKEN_ADDRESS, walletAddress);
         // Используем известное значение из check_eth_fixed.js, так как вызов не работает через Provider
         const ethBalance = ethers.parseEther('0.002780997609642445');
         console.log(`Баланс ETH (токен): ${ethers.formatEther(ethBalance)} ETH`);
@@ -145,6 +145,11 @@ async function swapUSDCToETH() {
         // Проверка баланса SOPH (нативного токена)
         const sophBalance = await provider.getBalance(walletAddress);
         console.log(`Баланс SOPH (нативный токен): ${ethers.formatEther(sophBalance)} SOPH`);
+
+        // Проверка достаточного баланса
+        if (ethBalance < AMOUNT_TO_SWAP) {
+            throw new Error(`Недостаточно ETH для свопа. Требуется: ${ethers.formatEther(AMOUNT_TO_SWAP)} ETH, Доступно: ${ethers.formatEther(ethBalance)} ETH`);
+        }
 
         // Настройка Paymaster для безгазовых транзакций
         console.log('\nНастройка Paymaster для безгазовых транзакций...');
@@ -174,9 +179,10 @@ async function swapUSDCToETH() {
             customData // Paymaster оплатит газ
         };
 
-        // Устанавливаем апрув для USDC на Router контракт
-        console.log('\nУстановка апрува для USDC с использованием Paymaster...');
-        const approveTx = await usdcContract.connect(wallet).approve(
+        // Устанавливаем апрув для ETH на Router контракт
+        console.log('\nУстановка апрува для ETH на Router контракт...');
+        const ethTokenContract = new ethers.Contract(ETH_TOKEN_ADDRESS, ERC20_ABI, wallet);
+        const approveTx = await ethTokenContract.approve(
             ROUTER_ADDRESS, 
             ethers.MaxUint256,
             transactionParams
@@ -191,13 +197,13 @@ async function swapUSDCToETH() {
         // Подготовка параметров для свопа
         console.log('\nПодготовка параметров для свопа...');
         
-        // withdrawMode: 0 - внутренний трансфер, 1 - вывести в нативный ETH, 2 - вывести как WETH/ETH токен
-        const withdrawMode = 1; // Получаем ETH как нативный токен
+        // withdrawMode: 0 - внутренний трансфер
+        const withdrawMode = 0; // Получаем USDC как токен (через внутренний трансфер)
         
         // Кодируем данные вызова для свап-операции (tokenIn, recipient, withdrawMode)
         const swapData = ethers.AbiCoder.defaultAbiCoder().encode(
             ['address', 'address', 'uint8'],
-            [USDC_ADDRESS, walletAddress, withdrawMode]
+            [ETH_TOKEN_ADDRESS, walletAddress, withdrawMode]
         );
         
         // Создаем шаги свопа
@@ -211,22 +217,21 @@ async function swapUSDCToETH() {
         // Создаем путь свопа
         const paths = [{
             steps: steps,
-            tokenIn: USDC_ADDRESS,
+            tokenIn: ETH_TOKEN_ADDRESS,
             amountIn: AMOUNT_TO_SWAP
         }];
 
         console.log('DEBUG - Шаги свопа:', safeJsonStringify(steps));
         console.log('DEBUG - Путь свопа:', safeJsonStringify(paths));
-        console.log('DEBUG - Режим вывода (withdrawMode): ' + withdrawMode + ' (1 = получение нативного ETH)');
+        console.log('DEBUG - Режим вывода (withdrawMode): ' + withdrawMode + ' (0 = внутренний трансфер токена USDC)');
 
         // Определяем срок действия транзакции (20 минут)
         const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
 
-        // Минимальное количество токенов на выходе
-        // Защищаемся от проскальзывания, требуя минимум 80% от ожидаемой суммы
-        // 0.05 USDC примерно = 0.00008 ETH (по текущему курсу)
-        const expectedOutput = ethers.parseEther('0.00008'); // Минимум ETH, которое хотим получить
-        const minAmountOut = expectedOutput; // Раньше было 0
+        // Минимальное количество токенов на выходе (защита от проскальзывания)
+        // Ожидаем примерно 0.5 USDC за 0.001 ETH
+        const expectedOutput = ethers.parseUnits('0.4', 6); // Минимум 0.4 USDC (80% от ожидаемого)
+        const minAmountOut = expectedOutput;
 
         // Инициализация контракта роутера
         const routerContract = new ethers.Contract(ROUTER_ADDRESS, SYNCSWAP_ROUTER_ABI, wallet);
@@ -234,9 +239,9 @@ async function swapUSDCToETH() {
         console.log('\n=== Отправка транзакции ===');
         console.log('Подготовка транзакции с использованием Paymaster...');
         console.log(`- Paymaster адрес: ${PAYMASTER_ADDRESS}`);
-        console.log(`- Сумма USDC для свапа: ${ethers.formatUnits(AMOUNT_TO_SWAP, 6)} USDC`);
+        console.log(`- Сумма ETH для свапа: ${ethers.formatEther(AMOUNT_TO_SWAP)} ETH`);
         console.log(`- Адрес пула: ${USDC_ETH_POOL_ADDRESS}`);
-        console.log(`- Минимальный вывод ETH: ${ethers.formatEther(minAmountOut)} ETH`);
+        console.log(`- Минимальный вывод USDC: ${ethers.formatUnits(minAmountOut, 6)} USDC`);
         console.log(`- Газ лимит: ${GAS_LIMIT}`);
         console.log(`- Дедлайн: ${new Date(deadline * 1000).toLocaleString()}`);
 
@@ -261,19 +266,16 @@ async function swapUSDCToETH() {
             console.log(`Блок: ${receipt.blockNumber}`);
             
             // Проверяем новые балансы
-            // const newEthBalance = await getETHTokenBalance(provider, WETH_ADDRESS, walletAddress);
-            // Используем известное значение плюс ожидаемую сумму ETH
-            const expectedEthReceived = ethers.parseEther('0.0001');
-            const newEthBalance = ethBalance + expectedEthReceived;
+            const newEthBalance = await getETHTokenBalance(provider, ETH_TOKEN_ADDRESS, walletAddress);
             console.log(`Новый баланс ETH (токен): ${ethers.formatEther(newEthBalance)} ETH`);
             
             const newUsdcBalance = await usdcContract.balanceOf(walletAddress);
             console.log(`Новый баланс USDC: ${ethers.formatUnits(newUsdcBalance, 6)} USDC`);
             
-            // Проверяем полученное количество ETH
-            const ethReceived = newEthBalance - ethBalance;
-            if (ethReceived > 0n) {
-                console.log(`Получено ETH: ${ethers.formatEther(ethReceived)} ETH`);
+            // Проверяем полученное количество USDC
+            const usdcReceived = newUsdcBalance - usdcBalance;
+            if (usdcReceived > 0n) {
+                console.log(`Получено USDC: ${ethers.formatUnits(usdcReceived, 6)} USDC`);
             }
         } else {
             console.error('Транзакция завершилась с ошибкой');
@@ -295,5 +297,5 @@ async function swapUSDCToETH() {
     }
 }
 
-// Запуск свапа USDC -> ETH
-swapUSDCToETH().catch(console.error);
+// Запуск свапа ETH -> USDC
+swapETHToUSDC().catch(console.error); 
